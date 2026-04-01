@@ -21,6 +21,8 @@ class YouTubeQueue(
     private var retryCount = 0
     private val maxRetries = 3
 
+    private class EmptyRadioQueueException : IllegalStateException()
+
     override suspend fun getInitialStatus(): Queue.Status {
         return withContext(IO) {
             var lastException: Throwable? = null
@@ -32,6 +34,10 @@ class YouTubeQueue(
                 )
             }
 
+            val isRadioRequest =
+                endpoint.playlistId?.startsWith("RDAMVM") == true ||
+                (endpoint.videoId != null && endpoint.playlistId == null)
+
             for (attempt in 0..maxRetries) {
                 try {
                     val nextResult = YouTube.next(endpoint, continuation).getOrThrow()
@@ -39,9 +45,9 @@ class YouTubeQueue(
                     var items = nextResult.items
                     val relEndpoint = nextResult.relatedEndpoint
                     
-                    if (continuation == null && items.size <= 1) {
+                    if (isRadioRequest && nextResult.continuation == null && items.size <= 1) {
                         if (endpoint.playlistId?.startsWith("RDAMVM") == true) {
-                            throw Exception("RDAMVM mixing failed (returned <= 1 item)")
+                            throw EmptyRadioQueueException()
                         } else if (relEndpoint != null) {
                             val relatedPage = YouTube.related(relEndpoint).getOrNull()
                             if (relatedPage != null && relatedPage.songs.isNotEmpty()) {
@@ -61,8 +67,11 @@ class YouTubeQueue(
                     )
                 } catch (e: Exception) {
                     lastException = e
-                    // If RDAMVM attempt fails, fallback to just the videoId
-                    if (endpoint.playlistId?.startsWith("RDAMVM") == true && endpoint.videoId != null) {
+                    if (
+                        e is EmptyRadioQueueException &&
+                        endpoint.playlistId?.startsWith("RDAMVM") == true &&
+                        endpoint.videoId != null
+                    ) {
                         endpoint = WatchEndpoint(videoId = endpoint.videoId)
                         // It will loop again and try with just videoId
                     }
