@@ -35,16 +35,37 @@ class YouTubeQueue(
             for (attempt in 0..maxRetries) {
                 try {
                     val nextResult = YouTube.next(endpoint, continuation).getOrThrow()
+                    
+                    var items = nextResult.items
+                    val relEndpoint = nextResult.relatedEndpoint
+                    
+                    if (continuation == null && items.size <= 1) {
+                        if (endpoint.playlistId?.startsWith("RDAMVM") == true) {
+                            throw Exception("RDAMVM mixing failed (returned <= 1 item)")
+                        } else if (relEndpoint != null) {
+                            val relatedPage = YouTube.related(relEndpoint).getOrNull()
+                            if (relatedPage != null && relatedPage.songs.isNotEmpty()) {
+                                val relatedSongs = relatedPage.songs.filter { it.id != endpoint.videoId }
+                                items = items + relatedSongs
+                            }
+                        }
+                    }
+
                     endpoint = nextResult.endpoint
                     continuation = nextResult.continuation
                     retryCount = 0
                     return@withContext Queue.Status(
                         title = nextResult.title,
-                        items = nextResult.items.map { it.toMediaItem() },
+                        items = items.map { it.toMediaItem() },
                         mediaItemIndex = nextResult.currentIndex ?: 0,
                     )
                 } catch (e: Exception) {
                     lastException = e
+                    // If RDAMVM attempt fails, fallback to just the videoId
+                    if (endpoint.playlistId?.startsWith("RDAMVM") == true && endpoint.videoId != null) {
+                        endpoint = WatchEndpoint(videoId = endpoint.videoId)
+                        // It will loop again and try with just videoId
+                    }
                 }
             }
             throw lastException ?: Exception("Failed to get initial status")
